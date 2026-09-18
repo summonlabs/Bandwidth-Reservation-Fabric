@@ -1,0 +1,48 @@
+# Build directories
+build/
+build-*/
+out/
+install/
+_install/
+_deps/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+*.cmake.user
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.idb
+
+# Editor / OS noise
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# Scratch runtime state produced by tools/tests
+*.brfjournal
+*.brfsnap
+*.brfepoch
+tmp/
+scratch/
+*.log
+*.dmp
