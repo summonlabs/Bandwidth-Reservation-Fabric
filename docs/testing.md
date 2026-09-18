@@ -314,15 +314,19 @@ produced, at the time of writing:
 | --- | --- | --- | --- |
 | `brf_core_tests` | 24 | 0 | 0 |
 | `brf_store_tests` | 8 | 0 | 0 |
-| `brf_coordinator_tests` | 25 | 0 | 0 |
+| `brf_coordinator_tests` | 28 | 0 | 0 |
 | `brf_property_tests` | 4 | 0 | 0 |
 | `brf_adversarial_tests` | 11 | 0 | 0 |
 | `brf_concurrency_tests` | 6 | 0 | 0 |
 | `brf_multiprocess_tests` | 5 | 0 | 0 |
+| `brf_runtime_checks_tests` | 1 | 0 | 0 |
 
-That is 83 tests, 0 failures. The run used prebuilt binaries whose build is not
-guaranteed to track later edits, so it should be repeated after any change (and the
-durability tests write only inside their own temporary directories). The
+That is 87 tests, 0 failures, in both the Debug and the Release configuration
+(`ctest --test-dir build` and `ctest --test-dir build-release`, 8/8 executables
+passing in each). `brf_runtime_checks_tests` validates MSVC debug-heap integrity
+around a full workload; AddressSanitizer is not available for x64 MSVC on this
+host, so no sanitizer result is claimed. Repeat the run after any change: the
+durability suites write only inside their own temporary directories. The
 multiprocess binary needs the matching `brf-coordinator` and `brf-probe`
 executables, which the build places in `build/tools` and passes to it as compile
 definitions.
