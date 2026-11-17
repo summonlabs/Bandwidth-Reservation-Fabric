@@ -337,3 +337,11 @@ BRF_TEST(adversarial, coordinator_refuses_a_corrupt_store) {
   BRF_CHECK(!refused.has_value());
   BRF_CHECK_EQ(refused.error().code, ErrorCode::kCorrupt);
 }
+
+BRF_TEST(adversarial, a_second_listener_cannot_take_a_listening_port) {
+  Result<TcpListener> first = TcpListener::bind_loopback(0);
+  BRF_REQUIRE(first.has_value());
+  Result<TcpListener> second = TcpListener::bind_loopback(first.value().port());
+  // Two coordinators must never share one listening port: the second bind fails.
+  BRF_CHECK(!second.has_value());
+}

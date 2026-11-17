@@ -3,9 +3,11 @@
 //
 // Durable store proofs: versioned records, integrity checks, torn-tail repair,
 // corruption refusal, snapshot + rotation.
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "brf/brf.hpp"
@@ -214,3 +216,38 @@ BRF_TEST(store, journal_validation_helpers_report_defects) {
   BRF_CHECK(!read_snapshot_file(directory.str() + "/fabric.brfsnap", nullptr).has_value());
 }
 
+BRF_TEST(store, snapshot_replacement_waits_for_a_reader_to_close) {
+  TempDir directory;
+  bool first_written = false;
+  bool reader_opened = false;
+  bool second_written = false;
+  {
+    Result<std::unique_ptr<Store>> store = Store::open(options_for(directory), nullptr);
+    BRF_REQUIRE(store.has_value());
+    Store& durable = *store.value();
+    BRF_CHECK_OK(durable.append(RecordKind::kFabricBoot, record_payload(1)));
+    first_written = durable.write_snapshot("FIRST-STATE").has_value();
+    BRF_CHECK_OK(durable.append(RecordKind::kFabricBoot, record_payload(2)));
+    {
+      // Another tool reading the store (an inspection, a scan) holds the
+      // snapshot open while it is replaced, and closes it shortly after.
+      std::ifstream reader(durable.snapshot_path(), std::ios::binary);
+      reader_opened = reader.is_open();
+      std::thread writer([&durable, &second_written] {
+        second_written = durable.write_snapshot("SECOND-STATE").has_value();
+      });
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      reader.close();
+      writer.join();
+    }
+    BRF_CHECK_OK(durable.close());
+  }
+  RecoveryReport report;
+  Result<std::unique_ptr<Store>> reopened = Store::open(options_for(directory), &report);
+  BRF_REQUIRE(reopened.has_value());
+  BRF_CHECK(first_written);
+  BRF_CHECK(reader_opened);
+  // The snapshot is not lost because a reader had the file open for a moment.
+  BRF_CHECK(second_written);
+  BRF_CHECK_EQ(reopened.value()->snapshot_payload(), std::string("SECOND-STATE"));
+}

@@ -4,14 +4,26 @@
 // Multiprocess proofs. Every test here uses real OS processes and real TCP
 // frames: a coordinator process, probe processes, and hard kills.
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "brf/brf.hpp"
 #include "support/fixtures.hpp"
 #include "support/process.hpp"
 #include "support/test_harness.hpp"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 using namespace brf;  // NOLINT(google-build-using-namespace)
 using namespace brf::test;
@@ -370,3 +382,75 @@ BRF_TEST(multiprocess, malformed_frames_do_not_disturb_durable_state) {
   coordinator.process.kill();
   (void)coordinator.process.wait();
 }
+
+BRF_TEST(multiprocess, a_shutdown_request_stops_the_coordinator) {
+  TempDir directory;
+  CoordinatorProcess coordinator = start_coordinator(directory.str());
+  BRF_REQUIRE(coordinator.started);
+  BRF_REQUIRE(coordinator.port != 0);
+  bool acknowledged = false;
+  {
+    Result<TcpSocket> socket = connect_loopback(coordinator.port);
+    BRF_REQUIRE(socket.has_value());
+    BRF_CHECK_OK(socket.value().write_frame(protocol::MessageType::kShutdown, std::string_view{}));
+    Result<protocol::Frame> reply = socket.value().read_frame(protocol::kMaxFrameBytes);
+    acknowledged = reply.has_value() && reply.value().type == protocol::MessageType::kOk;
+    socket.value().close();
+  }
+  // The coordinator accepted the request, so it must now stop on its own.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (coordinator.process.alive() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  const bool stopped = !coordinator.process.alive();
+  if (!stopped) {
+    coordinator.process.kill();
+  }
+  const int exit_code = coordinator.process.wait();
+  BRF_CHECK(acknowledged);
+  BRF_CHECK(stopped);
+  if (stopped) {
+    BRF_CHECK_EQ(exit_code, 0);
+  }
+}
+
+#ifdef _WIN32
+BRF_TEST(multiprocess, finished_sessions_release_their_threads) {
+  TempDir directory;
+  CoordinatorProcess coordinator = start_coordinator(directory.str());
+  BRF_REQUIRE(coordinator.started);
+  BRF_REQUIRE(coordinator.port != 0);
+  const HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                       static_cast<DWORD>(coordinator.process.pid()));
+  // One complete session: connected, answered and closed.
+  const auto serve_one = [&coordinator]() {
+    Result<TcpSocket> socket = connect_loopback(coordinator.port);
+    if (!socket.has_value()) return false;
+    Writer writer(8);
+    writer.u8(0);
+    if (!socket.value().write_frame(protocol::MessageType::kStats, writer.buffer())) return false;
+    Result<protocol::Frame> reply = socket.value().read_frame(protocol::kMaxFrameBytes);
+    socket.value().close();
+    return reply.has_value() && reply.value().type == protocol::MessageType::kOk;
+  };
+  const bool first_served = serve_one();
+  DWORD before = 0;
+  const bool counted_before = process != nullptr && ::GetProcessHandleCount(process, &before) != 0;
+  constexpr int kSessions = 200;
+  int served = 0;
+  for (int index = 0; index < kSessions; ++index) {
+    if (serve_one()) ++served;
+  }
+  DWORD after = 0;
+  const bool counted_after = process != nullptr && ::GetProcessHandleCount(process, &after) != 0;
+  if (process != nullptr) ::CloseHandle(process);
+  coordinator.process.kill();
+  (void)coordinator.process.wait();
+  BRF_CHECK(first_served);
+  BRF_CHECK(counted_before && counted_after);
+  BRF_CHECK_EQ(served, kSessions);
+  // A retained session thread keeps its handle, so growth that tracks the
+  // session count is the defect.
+  BRF_CHECK(after < before + 64);
+}
+#endif

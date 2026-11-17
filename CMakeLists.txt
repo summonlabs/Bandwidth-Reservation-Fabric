@@ -42,7 +42,10 @@ function(brf_apply_warnings target)
       target_compile_options(${target} PRIVATE /WX)
     endif()
     if(BRF_ENABLE_ASAN)
-      target_compile_options(${target} PRIVATE /fsanitize=address)
+      # Debug information is required: without it MSVC warns C5072, which /WX
+      # turns into an error, so the sanitized build did not compile.
+      target_compile_options(${target} PRIVATE /fsanitize=address /Zi)
+      target_link_options(${target} PRIVATE /INCREMENTAL:NO /DEBUG)
     endif()
   else()
     target_compile_options(${target} PRIVATE

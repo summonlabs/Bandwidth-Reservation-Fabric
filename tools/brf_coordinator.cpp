@@ -584,29 +584,59 @@ int main(int argc, char** argv) {
 
   std::mutex sessions_mutex;
   std::vector<std::shared_ptr<Session>> sessions;
-  std::vector<std::thread> workers;
+  // A session thread sets its flag as its last act; finished sessions are
+  // joined and dropped at the next accept instead of being kept until exit.
+  struct Worker {
+    std::shared_ptr<Session> session;
+    std::shared_ptr<std::atomic<bool>> exited;
+    std::thread thread;
+  };
+  std::vector<Worker> workers;
   std::atomic<bool> stop{false};
   std::atomic<bool> shutdown_requested{false};
+  const std::uint16_t port = listener.value().port();
 
   while (!stop.load()) {
     Result<brf::TcpSocket> socket = listener.value().accept();
     if (!socket) {
       break;  // The listener was closed: shutdown.
     }
+    if (stop.load()) {
+      break;  // Woken by the connection a shutdown request makes.
+    }
+    for (auto it = workers.begin(); it != workers.end();) {
+      if (it->exited->load()) {
+        it->thread.join();
+        {
+          std::lock_guard<std::mutex> guard(sessions_mutex);
+          sessions.erase(std::remove(sessions.begin(), sessions.end(), it->session), sessions.end());
+        }
+        it = workers.erase(it);
+      } else {
+        ++it;
+      }
+    }
     auto session = std::make_shared<Session>(*coordinator, std::move(socket.value()));
     {
       std::lock_guard<std::mutex> guard(sessions_mutex);
       sessions.push_back(session);
     }
-    workers.emplace_back([session, &stop, &shutdown_requested]() {
+    auto exited = std::make_shared<std::atomic<bool>>(false);
+    std::thread thread([session, exited, port, &stop, &shutdown_requested]() {
       Status served = session->serve();
       (void)served;
       if (session->shutdown_requested()) {
         shutdown_requested.store(true);
         stop.store(true);
+        // The accept loop is blocked in accept(); a loopback connection wakes
+        // it so that it sees the stop flag.
+        Result<brf::TcpSocket> wake = brf::connect_loopback(port);
+        (void)wake;
       }
       session->close();
+      exited->store(true);
     });
+    workers.push_back(Worker{session, exited, std::move(thread)});
     if (shutdown_requested.load()) {
       break;
     }
@@ -620,8 +650,8 @@ int main(int argc, char** argv) {
       session->close();
     }
   }
-  for (std::thread& worker : workers) {
-    worker.join();
+  for (Worker& worker : workers) {
+    worker.thread.join();
   }
   coordinator->begin_shutdown();
   Status flushed = coordinator->flush();

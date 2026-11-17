@@ -76,10 +76,14 @@ template <class T>
     }                                                                                       \
   } while (false)
 
+// The compared values are copies, not references: a reference bound to a part
+// of a temporary (for example f().value().field) would dangle before the
+// comparison reads it. The copies are not const so that comparing two
+// constants is not a constant condition (C4127).
 #define BRF_CHECK_EQ(actual, expected)                                                       \
   do {                                                                                       \
-    const auto& brf_actual_value = (actual);                                                 \
-    const auto& brf_expected_value = (expected);                                             \
+    auto brf_actual_value = (actual);                                                        \
+    auto brf_expected_value = (expected);                                                    \
     if (!(brf_actual_value == brf_expected_value)) {                                         \
       ::brf::test::report_failure(                                                           \
           __FILE__, __LINE__,                                                                \
